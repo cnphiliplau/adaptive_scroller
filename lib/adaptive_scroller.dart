@@ -42,11 +42,10 @@ class _AdaptiveItemMetrics {
   /// The state of this item's metrics.
   _AdaptiveItemState state;
 
-  _AdaptiveItemMetrics({
-    this.measuredHeight = -1.0, // -1 indicates "not measured"
-    this.cachedOffset = 0.0,
-    this.state = _AdaptiveItemState.initial,
-  });
+  _AdaptiveItemMetrics()
+      : measuredHeight = -1.0, // -1 indicates "not measured"
+        cachedOffset = 0.0,
+        state = _AdaptiveItemState.initial;
 }
 
 //----------------------------------------------------------------------------
@@ -59,7 +58,6 @@ class _AdaptiveItemMetrics {
 //  offsets of unmeasured items.
 class AdaptiveScrollMetricsController {
   late List<_AdaptiveItemMetrics> _metrics;
-  late double _defaultItemHeight;
   late int _scrollOffsetStartIndex;
   double _averageItemHeight;
   int _metricsMeasuredCount = 0;
@@ -76,8 +74,7 @@ class AdaptiveScrollMetricsController {
     required this.itemCount,
     double defaultItemHeight = _kDefaultItemHeight,
     int defaultVisibleItem = _kScrollOffsetStartIndex,
-  })  : _defaultItemHeight = defaultItemHeight,
-        _scrollOffsetStartIndex = defaultVisibleItem,
+  })  : _scrollOffsetStartIndex = defaultVisibleItem,
         _averageItemHeight = defaultItemHeight {
     // Initialize the metrics list for all items.
     _metrics = List.generate(
@@ -161,7 +158,6 @@ class AdaptiveScrollMetricsController {
 
   /// Resets the default item height used for estimations.
   void setDefaultItemHeight(double height) {
-    _defaultItemHeight = height;
     // If no items have been measured yet, update the average to match.
     if (_metricsMeasuredCount == 0) {
       _averageItemHeight = height;
