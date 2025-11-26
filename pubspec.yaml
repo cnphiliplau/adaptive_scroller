@@ -1,0 +1,22 @@
+name: adaptive_scroller
+description: "A smart Flutter scroll controller for long lists with variable item heights. It adaptively learns item sizes to provide fast, estimated jumps to any index, becoming more accurate as the user scrolls."
+
+version: 1.0.0
+
+homepage: https://github.com/cnphiliplau/adaptive_scroller.git
+
+repository: https://github.com/cnphiliplau/adaptive_scroller.git
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0 # Or a newer version
+
+
