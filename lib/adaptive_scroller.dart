@@ -1,13 +1,5 @@
-// filename:     adaptive_scroller.dart
-// copyright:    Copyright (C) 2025 Thinkwider CO., LTD.. All Rights Reserved.
-// author:       Philip Lau
-//               in collaboration with Google's AI Assistant
-// history:      13 nov, 2025 - Initial skeleton creation
-
-library adaptive_scroller;
-
-// import 'dart:math';
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:flutter/widgets.dart';
 
 //----------------------------------------------------------------------------
 // Enums and Constants
@@ -48,6 +40,18 @@ class _AdaptiveItemMetrics {
         state = _AdaptiveItemState.initial;
 }
 
+/// A data class returned by `calculateScrollOffset` containing the results
+/// of the scroll calculation.
+class ScrollOffsetResult {
+  /// The calculated or estimated target scroll offset in pixels.
+  final double targetOffset;
+
+  /// The distance in item count between the previous and current target index.
+  final int distance;
+
+  ScrollOffsetResult({required this.targetOffset, required this.distance});
+}
+
 //----------------------------------------------------------------------------
 // Manages all the layout metric calculations.
 //----------------------------------------------------------------------------
@@ -55,20 +59,28 @@ class _AdaptiveItemMetrics {
 ///
 /// This controller is the "engine" of the adaptive scroller. It maintains a
 /// list of metrics for each item and uses a running average to estimate the
-//  offsets of unmeasured items.
+/// offsets of unmeasured items. It is responsible for calculating the pixel
+/// offset required to scroll to any given index.
 class AdaptiveScrollMetricsController {
   late List<_AdaptiveItemMetrics> _metrics;
-  late int _scrollOffsetStartIndex;
+  final int _scrollOffsetStartIndex;
   double _averageItemHeight;
   int _metricsMeasuredCount = 0;
   final int itemCount;
-  late int _lastMeasured = 0;
 
-  /// The running average height of all measured items.
-  get averageItemHeight => _averageItemHeight;
+  /// The index of the last item in a contiguous block starting from index 0
+  /// that has had its size measured and its offset calculated.
+  int _lastMeasured = 0;
+  int _previousIndex = 0;
 
-  /// The item measured count.
-  get metricsMeasuredCount => _metricsMeasuredCount;
+  /// Tracks the last known bottom-most index to handle scrolling up from the end.
+  int _bottomIndex = 0;
+
+  /// The running average height of all items that have been measured so far.
+  double get averageItemHeight => _averageItemHeight;
+
+  /// The total number of items that have had their height measured.
+  int get metricsMeasuredCount => _metricsMeasuredCount;
 
   AdaptiveScrollMetricsController({
     required this.itemCount,
@@ -85,9 +97,11 @@ class AdaptiveScrollMetricsController {
   }
 
   /// Updates the height for a specific item, usually from a [SizeReportingWidget].
-  void updateItemHeight(int index, double measuredHeight) {
-    if (index >= _metrics.length || _metrics[index].state != _AdaptiveItemState.initial) {
-      return; // Already measured, no need to update again.
+  /// This is the primary input for the controller's learning process.
+  bool updateItemHeight(int index, double measuredHeight) {
+    if (index >= _metrics.length ||
+        _metrics[index].state != _AdaptiveItemState.initial) {
+      return false; // Already measured, no need to update again.
     }
 
     // Mark that the item's size has changed and needs its offset recalculated.
@@ -95,73 +109,109 @@ class AdaptiveScrollMetricsController {
     _metrics[index].state = _AdaptiveItemState.changed;
 
     // Update the running average. This is the core of the estimation.
-    // A simple but effective running average calculation.
     _averageItemHeight =
         ((_averageItemHeight * _metricsMeasuredCount) + measuredHeight) /
             (_metricsMeasuredCount + 1);
 
     ++_metricsMeasuredCount;
+    return true;
   }
 
   /// Calculates the scroll offset required to bring a target index into view.
-  /// This is the "engine" of the library.
-  double calculateScrollOffset(int targetIndex) {
+  ///
+  /// This is the most critical method in the library. It performs two key tasks:
+  /// 1. It iterates through all items that have been measured but not yet
+  ///    processed, calculating their precise `cachedOffset`. This advances the
+  ///    `_lastMeasured` high-water mark.
+  /// 2. If the `targetIndex` is beyond the `_lastMeasured` mark, it uses an O(1)
+  ///    calculation to estimate the total scroll height of the list, providing a
+  ///    target for the `ScrollController` to jump to.
+  ScrollOffsetResult calculateScrollOffset(
+      int targetIndex, ScrollPosition position) {
     if (targetIndex < 0 || targetIndex >= itemCount) {
-      return 0.0;
+      return ScrollOffsetResult(targetOffset: 0.0, distance: 0);
     }
 
-    // Optimization: If we already calculated this offset, return it.
+    final distance = (targetIndex - _previousIndex).abs();
+    _previousIndex = targetIndex;
+
+    // Fast path: If the target's offset is already accurately known, return it.
     if (_lastMeasured >= targetIndex) {
-      return _metrics[targetIndex].cachedOffset;
+      return ScrollOffsetResult(
+          targetOffset: _metrics[targetIndex].cachedOffset, distance: distance);
     }
 
-    // Find the last known offset to start from.
-    double offset = _metrics[_lastMeasured].cachedOffset;
-    double lastMeasuredHeight = _metrics[_lastMeasured].measuredHeight > 0
-        ? _metrics[_lastMeasured].measuredHeight
-        : _averageItemHeight;
+    // --- Phase 1: Calculate precise offsets for all newly measured items ---
+    // This loop advances the `_lastMeasured` index by processing any items
+    // marked as `changed` in a contiguous block from the start.
+    double preciseOffset = 0.0;
+    double prevItemHeight = 0.0;
 
-    // If the last measured item was past the start index, its height was already included.
-    if (_lastMeasured > _scrollOffsetStartIndex) {
-      offset += lastMeasuredHeight;
-    }
+    for (int i = _lastMeasured; (i < itemCount); ++i) {
+      if (_metrics[i].state == _AdaptiveItemState.changed) {
+        _metrics[i].state = _AdaptiveItemState.calculated;
+        _metrics[i].cachedOffset = preciseOffset + prevItemHeight;
 
-    // Loop from the last known point to the target.
-    for (int i = _lastMeasured + 1; i < targetIndex; ++i) {
-      double itemHeight;
-
-      if (_metrics[i].state == _AdaptiveItemState.initial) {
-        // For unmeasured items, use the running average.
-        itemHeight = _averageItemHeight;
+        if (i > _scrollOffsetStartIndex) {
+          preciseOffset += _metrics[i].measuredHeight;
+        }
+      } else if (_metrics[i].state == _AdaptiveItemState.calculated) {
+        preciseOffset = _metrics[i].cachedOffset;
+        if (i > _scrollOffsetStartIndex) {
+          prevItemHeight = _metrics[i].measuredHeight;
+        }
       } else {
-        // For measured items, use their actual height.
-        itemHeight = _metrics[i].measuredHeight;
+        // Stop when we hit the first unmeasured item.
+        break;
       }
 
-      // Cache the offset for the current item 'i'.
-      _metrics[i].cachedOffset = offset;
-      _metrics[i].state = _AdaptiveItemState.calculated;
-
-      // The key logic: Only add the height to the running offset if we are
-      // past the initial visible items.
-      if (i >= _scrollOffsetStartIndex) {
-        offset += itemHeight;
+      if (i > _lastMeasured) {
+        _lastMeasured = i;
       }
     }
 
-    // Update our high-water mark.
-    _lastMeasured = targetIndex - 1;
+    // --- Phase 2: Estimate offset for targets in the unmeasured zone ---
+    // This uses an O(1) calculation to estimate the total height of the list.
+    final remainingItemCount = (itemCount - 1 - _lastMeasured);
+    final estimatedRemainingHeight = remainingItemCount * _averageItemHeight;
 
-    // The final offset for the targetIndex is the last calculated offset.
-    return offset;
-  }
+    // The total estimated height is the sum of the precisely known part and
+    // the estimated remaining part.
+    final totalEstimatedHeight = preciseOffset + (estimatedRemainingHeight);
 
-  /// Resets the default item height used for estimations.
-  void setDefaultItemHeight(double height) {
-    // If no items have been measured yet, update the average to match.
-    if (_metricsMeasuredCount == 0) {
-      _averageItemHeight = height;
+    // --- Phase 3: Handle specific scrolling scenarios ---
+
+    // Scenario: Scrolling to the very last item.
+    if (targetIndex == (itemCount - 1)) {
+      _bottomIndex = targetIndex;
+
+      // If our estimated total height is greater than what Flutter currently
+      // knows, we must provide our larger estimate to force it to scroll further.
+      if (totalEstimatedHeight > position.maxScrollExtent) {
+        _metrics[targetIndex].cachedOffset = totalEstimatedHeight;
+        return ScrollOffsetResult(
+            targetOffset: totalEstimatedHeight, distance: distance);
+      }
+
+      // Otherwise, trust Flutter's current maximum extent.
+      _metrics[targetIndex].cachedOffset = position.maxScrollExtent;
+      return ScrollOffsetResult(
+          targetOffset: position.maxScrollExtent, distance: distance);
     }
+
+    // Scenario: Scrolling up from the bottom of the list.
+    if (targetIndex == (_bottomIndex - 1)) {
+      _bottomIndex = targetIndex;
+      final gap = itemCount - _bottomIndex - 1;
+      final targetOffset = position.maxScrollExtent - (gap * _averageItemHeight);
+
+      return ScrollOffsetResult(targetOffset: targetOffset, distance: distance);
+    }
+
+    // Default scenario: Return the total estimated height. This is the most
+    // common path for jumps into the unmeasured part of the list.
+    return ScrollOffsetResult(
+        targetOffset: totalEstimatedHeight, distance: distance);
   }
 }
 
@@ -172,7 +222,7 @@ class AdaptiveScrollMetricsController {
 /// in a [ListView] with items of variable height.
 ///
 /// This controller works in conjunction with an [AdaptiveScrollMetricsController]
-/// and [SizeReportingWidget] to measure item heights as they are built,
+/// and a `SizeReportingWidget` to measure item heights as they are built,
 /// allowing it to accurately calculate scroll offsets for items that have not
 /// yet been rendered.
 class AdaptiveScrollController extends ScrollController {
@@ -187,57 +237,33 @@ class AdaptiveScrollController extends ScrollController {
     super.debugLabel,
   });
 
-  // Jumps directly to an estimated or calculated position without animation.
-  // Ideal for large jumps, like a "Go to Last" button.
+  /// Jumps directly to an estimated or calculated position without animation.
+  /// Ideal for large jumps, like a "Go to Last" button.
   Future<void> jumpToIndex(int index) {
-    final targetOffset = () {
-      final calOffset = metricsController.calculateScrollOffset(index);
+    if (!position.hasPixels) {
+      return Future.value();
+    }
 
-      // Ensure the target offset does not exceed the maximum scroll extent.
-      // This check is only possible if the scroll view has been laid out.
-      if (position.hasPixels) {
-        if (calOffset > position.maxScrollExtent) {
-          return position.maxScrollExtent;
-        }
-      }
-      return calOffset;
-    }();
-
-    jumpTo(targetOffset);
+    final scrollResult =
+    metricsController.calculateScrollOffset(index, position);
+    jumpTo(scrollResult.targetOffset);
     return Future.value();
   }
 
-  /// Scrolls to an index, automatically deciding whether to animate or jump.
+  /// Scrolls to an index, automatically deciding whether to animate or jump
+  /// based on the distance of the scroll.
   Future<void> scrollToIndex(int index,
       {Duration duration = const Duration(milliseconds: 300),
         Curve curve = Curves.easeInOut}) {
-
     // This check is crucial. We can't get scroll metrics until the view is built.
     if (!position.hasPixels) {
       return Future.value();
     }
 
-    // Determine the current index based on scroll position
-    // This is an estimation but good enough for this logic.
-    final currentAverageHeight = metricsController.averageItemHeight > 0
-        ? metricsController.averageItemHeight
-        : _kDefaultItemHeight;
-    final currentIndex = (offset / currentAverageHeight).round();
-
-    final distance = (index - currentIndex).abs();
-
-    final targetOffset = () {
-      final calOffset = metricsController.calculateScrollOffset(index);
-
-      final endOfContentThreshold = position.maxScrollExtent - position.viewportDimension;
-
-      // Ensure the target offset does not exceed the maximum scroll extent.
-      // This check is only possible if the scroll view has been laid out.
-      if (calOffset > endOfContentThreshold) {
-        return position.maxScrollExtent;
-      }
-      return calOffset;
-    }();
+    final scrollResult =
+    metricsController.calculateScrollOffset(index, position);
+    final targetOffset = scrollResult.targetOffset;
+    final distance = scrollResult.distance;
 
     // If the scroll distance is too large, just jump. Otherwise, animate.
     if (distance > largeScrollThresholdInItems) {
@@ -254,7 +280,7 @@ class AdaptiveScrollController extends ScrollController {
 }
 
 //----------------------------------------------------------------------------
-// A helper widget to report its size for an item.
+// A helper widget to report its size.
 //----------------------------------------------------------------------------
 /// A wrapper widget that reports its size after it has been laid out.
 ///
@@ -303,4 +329,3 @@ class _SizeReportingWidgetState extends State<SizeReportingWidget> {
     return widget.child;
   }
 }
-
