@@ -12,8 +12,10 @@ const int _kScrollOffsetStartIndex = 1;
 enum _AdaptiveItemState {
   /// The item has not been measured yet. Its height is an estimate.
   initial,
+
   /// The item has been measured, but its offset has not been cached yet.
   changed,
+
   /// The item has been measured and its offset is cached and stable.
   calculated,
 }
@@ -91,13 +93,15 @@ class AdaptiveScrollMetricsController {
     // Initialize the metrics list for all items.
     _metrics = List.generate(
       itemCount,
-          (index) => _AdaptiveItemMetrics(),
+      (index) => _AdaptiveItemMetrics(),
       growable: false,
     );
   }
 
   /// Updates the height for a specific item, usually from a [SizeReportingWidget].
   /// This is the primary input for the controller's learning process.
+  /// This method will only update the height if it has not been measured before.
+  /// Subsequent size changes for an already-measured item are ignored.
   bool updateItemHeight(int index, double measuredHeight) {
     if (index >= _metrics.length ||
         _metrics[index].state != _AdaptiveItemState.initial) {
@@ -172,7 +176,7 @@ class AdaptiveScrollMetricsController {
 
     // --- Phase 2: Estimate offset for targets in the unmeasured zone ---
     // This uses an O(1) calculation to estimate the total height of the list.
-    final remainingItemCount = (itemCount - 1 - _lastMeasured);
+    final remainingItemCount = (targetIndex - _lastMeasured);
     final estimatedRemainingHeight = remainingItemCount * _averageItemHeight;
 
     // The total estimated height is the sum of the precisely known part and
@@ -188,13 +192,13 @@ class AdaptiveScrollMetricsController {
       // If our estimated total height is greater than what Flutter currently
       // knows, we must provide our larger estimate to force it to scroll further.
       if (totalEstimatedHeight > position.maxScrollExtent) {
-        _metrics[targetIndex].cachedOffset = totalEstimatedHeight;
+        // _metrics[targetIndex].cachedOffset = totalEstimatedHeight;
         return ScrollOffsetResult(
             targetOffset: totalEstimatedHeight, distance: distance);
       }
 
       // Otherwise, trust Flutter's current maximum extent.
-      _metrics[targetIndex].cachedOffset = position.maxScrollExtent;
+      // _metrics[targetIndex].cachedOffset = position.maxScrollExtent;
       return ScrollOffsetResult(
           targetOffset: position.maxScrollExtent, distance: distance);
     }
@@ -203,13 +207,20 @@ class AdaptiveScrollMetricsController {
     if (targetIndex == (_bottomIndex - 1)) {
       _bottomIndex = targetIndex;
       final gap = itemCount - _bottomIndex - 1;
-      final targetOffset = position.maxScrollExtent - (gap * _averageItemHeight);
+      final targetOffset =
+          position.maxScrollExtent - (gap * _averageItemHeight);
 
       return ScrollOffsetResult(targetOffset: targetOffset, distance: distance);
     }
 
     // Default scenario: Return the total estimated height. This is the most
     // common path for jumps into the unmeasured part of the list.
+
+    if (totalEstimatedHeight > position.maxScrollExtent) {
+      return ScrollOffsetResult(
+          targetOffset: position.maxScrollExtent, distance: distance);
+    }
+
     return ScrollOffsetResult(
         targetOffset: totalEstimatedHeight, distance: distance);
   }
@@ -245,7 +256,7 @@ class AdaptiveScrollController extends ScrollController {
     }
 
     final scrollResult =
-    metricsController.calculateScrollOffset(index, position);
+        metricsController.calculateScrollOffset(index, position);
     jumpTo(scrollResult.targetOffset);
     return Future.value();
   }
@@ -254,14 +265,14 @@ class AdaptiveScrollController extends ScrollController {
   /// based on the distance of the scroll.
   Future<void> scrollToIndex(int index,
       {Duration duration = const Duration(milliseconds: 300),
-        Curve curve = Curves.easeInOut}) {
+      Curve curve = Curves.easeInOut}) {
     // This check is crucial. We can't get scroll metrics until the view is built.
     if (!position.hasPixels) {
       return Future.value();
     }
 
     final scrollResult =
-    metricsController.calculateScrollOffset(index, position);
+        metricsController.calculateScrollOffset(index, position);
     final targetOffset = scrollResult.targetOffset;
     final distance = scrollResult.distance;
 
@@ -301,6 +312,9 @@ class SizeReportingWidget extends StatefulWidget {
 }
 
 class _SizeReportingWidgetState extends State<SizeReportingWidget> {
+  // In _SizeReportingWidgetState
+  Size? _lastReportedSize;
+
   @override
   void initState() {
     super.initState();
@@ -309,12 +323,12 @@ class _SizeReportingWidgetState extends State<SizeReportingWidget> {
 
   void _reportSize() {
     if (mounted) {
-      final context = this.context;
-      if (context.size != null) {
-        widget.onSizeChange(context.size!);
+      final newSize = context.size;
+      if (newSize != null && newSize != _lastReportedSize) {
+        _lastReportedSize = newSize;
+        widget.onSizeChange(newSize);
       }
     }
-
   }
 
   // Also report size on update, in case layout changes.

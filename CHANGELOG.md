@@ -1,3 +1,16 @@
+## 1.0.3 - 2025-12-16
+
+### Fixed
+- Corrected a bug in the scroll offset calculation that could cause inaccuracies when scrolling large distances.
+
+### Changed
+- **Performance:** `SizeReportingWidget` now caches its last reported size to avoid sending redundant update notifications on widget rebuilds.
+- **Performance:** The scroll controller now uses a "high-water mark" to avoid re-calculating metrics for already-processed items, improving efficiency on subsequent scrolls.
+- **Scrolling Behavior:** Refined the logic to better handle scrolling precisely to the final item in the list.
+
+### Added
+- Improved internal documentation and code comments to clarify the logic of `AdaptiveScrollMetricsController`.
+
 ## 1.0.2
 
 ### Performance

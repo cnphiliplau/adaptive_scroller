@@ -41,7 +41,8 @@ class _MyHomePageState extends State<MyHomePage> {
   void initState() {
     super.initState();
     _metricsController = AdaptiveScrollMetricsController(itemCount: _itemCount);
-    _scrollController = AdaptiveScrollController(metricsController: _metricsController);
+    _scrollController =
+        AdaptiveScrollController(metricsController: _metricsController);
   }
 
   @override
@@ -98,9 +99,11 @@ class _MyHomePageState extends State<MyHomePage> {
                 // Use SizeReportingWidget to measure each item
                 return SizeReportingWidget(
                   // The 'onSizeChange' parameter is required
-                  onSizeChange: (size) => _metricsController.updateItemHeight(index, size.height),
+                  onSizeChange: (size) =>
+                      _metricsController.updateItemHeight(index, size.height),
                   child: Card(
-                    color: Colors.primaries[index % Colors.primaries.length].shade100,
+                    color: Colors
+                        .primaries[index % Colors.primaries.length].shade100,
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       // Create items with variable height
