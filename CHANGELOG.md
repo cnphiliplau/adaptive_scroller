@@ -1,3 +1,12 @@
+## 1.0.4 - 2025-12-21
+
+*   **FEAT**: Added `setEnlargeFactor` to dynamically tune the scroll estimation aggressiveness.
+*   **FEAT**: Introduced `resetAllItemState()` to clear the entire measurement cache, essential when the list's underlying data source changes completely.
+*   **FEAT**: Added `resetItemState(int index)` for fine-grained control, allowing the state of a single item to be reset for re-measurement.
+*   **FIX**: Hardened `SizeReportingWidget` against rare race conditions by adding checks before invoking callbacks.
+*   **DOCS**: Significantly improved internal documentation and comments to clarify complex logic, especially the state-re-synchronization behavior in the offset calculation phase.
+*   **REFACTOR**: Minor code cleanup and variable name clarifications for better maintainability.
+
 ## 1.0.3 - 2025-12-16
 
 ### Fixed

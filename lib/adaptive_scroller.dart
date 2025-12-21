@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 //----------------------------------------------------------------------------
 
 const double _kDefaultItemHeight = 60.0;
+const double _kDefaultEnlargeFactor = 1.0;
 const int _kScrollOffsetStartIndex = 1;
 
 /// The state of an item's metrics within the controller.
@@ -65,17 +66,24 @@ class ScrollOffsetResult {
 /// offset required to scroll to any given index.
 class AdaptiveScrollMetricsController {
   late List<_AdaptiveItemMetrics> _metrics;
+  late double _enlargeFactor;
   final int _scrollOffsetStartIndex;
   double _averageItemHeight;
   int _metricsMeasuredCount = 0;
   final int itemCount;
 
-  /// The index of the last item in a contiguous block starting from index 0
-  /// that has had its size measured and its offset calculated.
+  /// The high-water mark for measured items. All items from index 0 up to
+  /// (but not including) _lastMeasured have had their offsets accurately
+  /// calculated and cached.
   int _lastMeasured = 0;
+
+  /// The last target index requested by a scroll operation. Used to calculate
+  /// the distance of the current scroll.
   int _previousIndex = 0;
 
-  /// Tracks the last known bottom-most index to handle scrolling up from the end.
+  /// Tracks the highest index the user has programmatically scrolled to.
+  /// This is used as an anchor for calculating "scroll up by one" actions
+  /// from a far-off position.
   int _bottomIndex = 0;
 
   /// The running average height of all items that have been measured so far.
@@ -84,13 +92,19 @@ class AdaptiveScrollMetricsController {
   /// The total number of items that have had their height measured.
   int get metricsMeasuredCount => _metricsMeasuredCount;
 
+  /// Set the enlarge factor to maximize the average height
+  set setEnlargeFactor(double enlargeFactor) {
+    _enlargeFactor = enlargeFactor;
+  }
+
   AdaptiveScrollMetricsController({
     required this.itemCount,
+    double enlargeFactor = _kDefaultEnlargeFactor,
     double defaultItemHeight = _kDefaultItemHeight,
     int defaultVisibleItem = _kScrollOffsetStartIndex,
-  })  : _scrollOffsetStartIndex = defaultVisibleItem,
+  })  : _enlargeFactor = enlargeFactor,
+        _scrollOffsetStartIndex = defaultVisibleItem,
         _averageItemHeight = defaultItemHeight {
-    // Initialize the metrics list for all items.
     _metrics = List.generate(
       itemCount,
       (index) => _AdaptiveItemMetrics(),
@@ -119,6 +133,18 @@ class AdaptiveScrollMetricsController {
 
     ++_metricsMeasuredCount;
     return true;
+  }
+
+  /// This method will reset all items state to initial
+  void resetAllItemState() {
+    for (int i = 0; i < _metrics.length; ++i) {
+      _metrics[i].state = _AdaptiveItemState.initial;
+    }
+  }
+
+  /// This method will reset specific item state to initial
+  void resetItemState(int index) {
+    _metrics[index].state = _AdaptiveItemState.initial;
   }
 
   /// Calculates the scroll offset required to bring a target index into view.
@@ -160,6 +186,11 @@ class AdaptiveScrollMetricsController {
           preciseOffset += _metrics[i].measuredHeight;
         }
       } else if (_metrics[i].state == _AdaptiveItemState.calculated) {
+        // This item was already processed in a previous scroll operation.
+        // Re-synchronize our calculation state using this item as a stable
+        // anchor point. `preciseOffset` is reset to this item's known
+        // offset, and `prevItemHeight` is reset to its measured height
+        // to correctly calculate the next item in this specific pass.
         preciseOffset = _metrics[i].cachedOffset;
         if (i > _scrollOffsetStartIndex) {
           prevItemHeight = _metrics[i].measuredHeight;
@@ -169,15 +200,14 @@ class AdaptiveScrollMetricsController {
         break;
       }
 
-      if (i > _lastMeasured) {
-        _lastMeasured = i;
-      }
+      _lastMeasured = i;
     }
 
     // --- Phase 2: Estimate offset for targets in the unmeasured zone ---
     // This uses an O(1) calculation to estimate the total height of the list.
     final remainingItemCount = (targetIndex - _lastMeasured);
-    final estimatedRemainingHeight = remainingItemCount * _averageItemHeight;
+    final estimatedRemainingHeight =
+        remainingItemCount * _averageItemHeight * _enlargeFactor;
 
     // The total estimated height is the sum of the precisely known part and
     // the estimated remaining part.
@@ -192,7 +222,6 @@ class AdaptiveScrollMetricsController {
       // If our estimated total height is greater than what Flutter currently
       // knows, we must provide our larger estimate to force it to scroll further.
       if (totalEstimatedHeight > position.maxScrollExtent) {
-        // _metrics[targetIndex].cachedOffset = totalEstimatedHeight;
         return ScrollOffsetResult(
             targetOffset: totalEstimatedHeight, distance: distance);
       }
@@ -207,19 +236,14 @@ class AdaptiveScrollMetricsController {
     if (targetIndex == (_bottomIndex - 1)) {
       _bottomIndex = targetIndex;
       final gap = itemCount - _bottomIndex - 1;
-      final targetOffset =
-          position.maxScrollExtent - (gap * _averageItemHeight);
+      final targetOffset = position.maxScrollExtent -
+          (gap * _averageItemHeight * _enlargeFactor);
 
       return ScrollOffsetResult(targetOffset: targetOffset, distance: distance);
     }
 
     // Default scenario: Return the total estimated height. This is the most
     // common path for jumps into the unmeasured part of the list.
-
-    if (totalEstimatedHeight > position.maxScrollExtent) {
-      return ScrollOffsetResult(
-          targetOffset: position.maxScrollExtent, distance: distance);
-    }
 
     return ScrollOffsetResult(
         targetOffset: totalEstimatedHeight, distance: distance);
@@ -312,7 +336,6 @@ class SizeReportingWidget extends StatefulWidget {
 }
 
 class _SizeReportingWidgetState extends State<SizeReportingWidget> {
-  // In _SizeReportingWidgetState
   Size? _lastReportedSize;
 
   @override
@@ -322,12 +345,12 @@ class _SizeReportingWidgetState extends State<SizeReportingWidget> {
   }
 
   void _reportSize() {
-    if (mounted) {
-      final newSize = context.size;
-      if (newSize != null && newSize != _lastReportedSize) {
-        _lastReportedSize = newSize;
-        widget.onSizeChange(newSize);
-      }
+    if (!mounted) return; // More robust check
+    final newSize = context.size;
+    if (newSize != null && newSize != _lastReportedSize) {
+      // By the time we get here, the widget could theoretically be unmounted.
+      _lastReportedSize = newSize;
+      widget.onSizeChange(newSize);
     }
   }
 
